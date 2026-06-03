@@ -86,55 +86,55 @@ const LoraCard = ({ lora, onSelect }) => {
 // ----------------------------------------------------
 
 const WebUI = () => {
-  const [activeTab, setActiveTab] = useState('generate'); // 'generate' atau 'history'
+  const [activeTab, setActiveTab] = useState('generate'); 
 
-  // State Input Utama
   const [prompt, setPrompt] = useLocalStorage('horde_prompt', '');
   const [negativePrompt, setNegativePrompt] = useLocalStorage('horde_neg_prompt', '');
   const [apiKey, setApiKey] = useLocalStorage('horde_api_key', '');
 
-  // State Pengaturan Utama
   const [selectedModel, setSelectedModel] = useLocalStorage('horde_model', '');
+  const [selectedWorker, setSelectedWorker] = useLocalStorage('horde_worker', ''); // State Baru: Worker Select
   const [resolution, setResolution] = useLocalStorage('horde_resolution', '1024x1024');
-  const [batchSize, setBatchSize] = useLocalStorage('horde_batch_size', 1);
+  const [batchSize, setBatchSize] = useLocalStorage('horde_batch_size', 1); 
 
-  // State KSampler & Tuning
   const [sampler, setSampler] = useLocalStorage('horde_sampler', 'k_dpmpp_2m');
   const [steps, setSteps] = useLocalStorage('horde_steps', 25);
   const [cfgScale, setCfgScale] = useLocalStorage('horde_cfg', 7.0);
   const [seed, setSeed] = useLocalStorage('horde_seed', '');
   const [clipSkip, setClipSkip] = useLocalStorage('horde_clipskip', 1);
 
-  // State Manajemen LoRA
   const [loras, setLoras] = useLocalStorage('horde_loras', []);
 
-  // State LoRA Browser (Civitai)
+  // State LoRA Browser 
   const [isLoraBrowserOpen, setIsLoraBrowserOpen] = useState(false);
   const [loraSearchQuery, setLoraSearchQuery] = useState('');
   const [loraBaseModelFilter, setLoraBaseModelFilter] = useState(''); 
   const [loraSearchResults, setLoraSearchResults] = useState([]);
   const [isSearchingLora, setIsSearchingLora] = useState(false);
 
-  // State Parameter Tambahan / Toggles
+  // State Toggles
   const [useKarras, setUseKarras] = useLocalStorage('horde_karras', true);
   const [allowSlowWorkers, setAllowSlowWorkers] = useLocalStorage('horde_slow_workers', true);
   const [useHiresFix, setUseHiresFix] = useLocalStorage('horde_hires', false);
   const [useTiling, setUseTiling] = useLocalStorage('horde_tiling', false);
 
-  // Diperbarui: State Galeri Berubah Menjadi Riwayat Otomatis (History)
+  const [gallery, setGallery] = useLocalStorage('horde_gallery', []);
   const [history, setHistory] = useLocalStorage('horde_history_v2', []);
-  const [selectedHistoryItem, setSelectedHistoryItem] = useState(null); // State untuk Modal Detail
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState(null); 
 
   // State Dinamis Sesi Saat Ini
   const [models, setModels] = useState([]);
+  const [workersList, setWorkersList] = useState([]); // State Baru: List Worker
   const [hordeStats, setHordeStats] = useState({ queued: 0, workers: 0 });
   const [isLoadingData, setIsLoadingData] = useState(true);
+  
+  // State Generasi & Progres QoL
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [generatedImages, setGeneratedImages] = useState([]);
+  const [genProgress, setGenProgress] = useState({ queue: 0, waitTime: 0, status: 'Menyiapkan...' }); 
+  const [generatedImages, setGeneratedImages] = useState([]); 
   const [error, setError] = useState(null);
 
-  // Fetch Data AI Horde (Dibiarkan Bebas Tanpa Filter NSFW Sesuai Instruksi)
   useEffect(() => {
     const fetchHordeData = async () => {
       setModels(prev => prev.length === 0 ? [] : prev);
@@ -145,9 +145,16 @@ const WebUI = () => {
 
         const modelsRes = await fetch('https://stablehorde.net/api/v2/status/models');
         const modelsData = await modelsRes.json();
-
         const activeModels = modelsData.filter(m => m.type === 'image').sort((a, b) => b.count - a.count);
         setModels(activeModels);
+
+        // FITUR BARU: Fetch daftar workers yang sedang online
+        const workersRes = await fetch('https://stablehorde.net/api/v2/workers?type=image');
+        const workersData = await workersRes.json();
+        const activeWorkers = workersData
+          .filter(w => w.online && !w.maintenance_mode)
+          .sort((a, b) => (b.requests_fulfilled || 0) - (a.requests_fulfilled || 0));
+        setWorkersList(activeWorkers);
 
         setSelectedModel(currentSelected => {
           if (!currentSelected && activeModels.length > 0) return activeModels[0].name;
@@ -175,7 +182,7 @@ const WebUI = () => {
     return array[0].toString();
   };
 
-  // Pencarian LoRA di Civitai
+  // --- Fungsi Pencarian LoRA ---
   const fetchCivitaiLoras = async (query = '', baseModel = '') => {
     setIsSearchingLora(true);
     try {
@@ -198,6 +205,7 @@ const WebUI = () => {
     if (isLoraBrowserOpen) {
       fetchCivitaiLoras(loraSearchQuery, loraBaseModelFilter);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loraBaseModelFilter]);
 
   const openLoraBrowser = () => {
@@ -213,23 +221,25 @@ const WebUI = () => {
     const loraId = selectedVersionId.toString();
 
     if (!loras.some(l => l.name === loraId)) {
-      setLoras([...loras, { id: Date.now(), name: loraId, title: `${civitaiModel.name} (${versionName})`, strength: 1.0 }]);
+      // Menyematkan flag is_version: true secara internal untuk menandai bahwa ini dari Browser
+      setLoras([...loras, { id: Date.now(), name: loraId, title: `${civitaiModel.name} (${versionName})`, strength: 1.0, is_version: true }]);
     }
     setIsLoraBrowserOpen(false); 
   };
 
-  const handleAddLoraManual = () => setLoras([...loras, { id: Date.now(), name: '', title: '', strength: 1.0 }]);
+  const handleAddLoraManual = () => setLoras([...loras, { id: Date.now(), name: '', title: '', strength: 1.0, is_version: false }]);
   const handleUpdateLora = (id, field, value) => setLoras(loras.map(l => l.id === id ? { ...l, [field]: value } : l));
   const handleRemoveLora = (id) => setLoras(loras.filter(l => l.id !== id));
 
-  // --- Fungsi Generate Utama ---
+  // --- Fungsi Generate Utama dengan Progres QoL ---
   const handleGenerate = async () => {
     if (!prompt.trim() || !selectedModel) return;
 
     setIsGenerating(true);
     setGeneratedImages([]); 
     setError(null);
-    setStatusMessage('Menyiapkan parameter jaringan...');
+    setStatusMessage('Mengirim request ke server...');
+    setGenProgress({ queue: 0, waitTime: 0, status: 'Menyiapkan...' });
 
     const fullPrompt = negativePrompt.trim() ? `${prompt} ### ${negativePrompt}` : prompt;
     const [width, height] = resolution.split('x').map(Number);
@@ -237,10 +247,12 @@ const WebUI = () => {
     const seedValue = seed.trim();
     const finalSeed = seedValue === '' ? generateRandomSeed() : /^\d+$/.test(seedValue) ? seedValue : generateRandomSeed();
 
+    // BUG FIX LORA: Menyertakan 'is_version: true' jika berasal dari browser Civitai
     const activeLoras = loras.filter(l => l.name.trim() !== '').map(l => ({
         name: l.name.trim(), 
         model: parseFloat(l.strength),
-        clip: parseFloat(l.strength)
+        clip: parseFloat(l.strength),
+        ...( (l.is_version || l.title) ? { is_version: true } : {} )
     }));
 
     const baseParams = {
@@ -267,8 +279,12 @@ const WebUI = () => {
       params: baseParams
     };
 
+    // Menyisipkan preferensi worker jika dipilih
+    if (selectedWorker && selectedWorker.trim() !== '') {
+      payload.workers = [selectedWorker.trim()];
+    }
+
     try {
-      setStatusMessage('Mengirim request ke Horde...');
       const res = await fetch('https://stablehorde.net/api/v2/generate/async', {
         method: 'POST',
         headers: {
@@ -285,61 +301,65 @@ const WebUI = () => {
       let isDone = false;
 
       while (!isDone) {
-        setStatusMessage('Menunggu eksekusi GPU...');
         await delay(3000);
 
         const checkRes = await fetch(`https://stablehorde.net/api/v2/generate/check/${requestId}`);
         const checkData = await checkRes.json();
 
-        if (checkData.faulted) throw new Error('Worker GPU mengalami kegagalan. Coba kurangi parameter atau ganti model.');
+        if (checkData.faulted) throw new Error('Worker GPU gagal memproses. Jika menggunakan target worker, pastikan model/lora didukung oleh worker tersebut.');
 
         if (checkData.done) {
           isDone = true;
-          setStatusMessage('Mengunduh hasil akhir...');
+          setGenProgress(prev => ({ ...prev, status: 'downloading' }));
+          setStatusMessage('Proses selesai, mengunduh gambar...');
 
           const statusRes = await fetch(`https://stablehorde.net/api/v2/generate/status/${requestId}`);
           const statusData = await statusRes.json();
 
           if (statusData.generations && statusData.generations.length > 0) {
-            // Pemrosesan output array gambar
             const processedImages = statusData.generations.map(gen => {
               const src = (gen.img.startsWith('http://') || gen.img.startsWith('https://')) ? gen.img : `data:image/webp;base64,${gen.img}`;
-              return { url: src, seed: gen.seed || finalSeed };
+              return { url: src, seed: gen.seed || finalSeed, worker_name: gen.worker_name };
             });
             
             setGeneratedImages(processedImages.map(p => p.url));
 
-            // === OOM-SAFE AUTO HISTORY INGESTION ===
             const newHistoryEntries = processedImages.map((p, idx) => ({
               id: Date.now() + idx + Math.random(),
               image: p.url,
               prompt: prompt,
               negativePrompt: negativePrompt,
               model: selectedModel,
+              worker: p.worker_name || selectedWorker, // Simpan histori worker yang eksekusi
               resolution: resolution,
               sampler: sampler,
               steps: steps,
               cfgScale: cfgScale,
               seed: p.seed,
               clipSkip: clipSkip,
-              loras: JSON.parse(JSON.stringify(loras)), // Deep copy array LoRA saat ini
+              loras: JSON.parse(JSON.stringify(loras)), 
               date: new Date().toLocaleString('id-ID')
             }));
 
-            // Menyimpan riwayat otomatis hingga maksimal 40 gambar terbaru
             setHistory(prev => [...newHistoryEntries, ...prev].slice(0, 40));
           } else {
             throw new Error('Gambar diproses, namun tidak ada data yang dikembalikan.');
           }
         } else {
-          if (checkData.wait_time > 0) setStatusMessage(`Dalam antrean. Sisa waktu: ${checkData.wait_time} detik...`);
+          // UPDATE PROGRESS BERDASARKAN STATUS ANTRIAN/RENDERING DARI HORDE
+          setGenProgress({
+            queue: checkData.queue_position || 0,
+            waitTime: checkData.wait_time || 0,
+            status: checkData.processing > 0 ? 'rendering' : 'waiting'
+          });
         }
       }
     } catch (err) {
       setError(err.message || 'Terjadi kesalahan sistem.');
-    } companions: {
+    } finally {
       setIsGenerating(false);
       setStatusMessage('');
+      setGenProgress({ queue: 0, waitTime: 0, status: '' });
     }
   };
 
@@ -350,11 +370,33 @@ const WebUI = () => {
     setError(null);
   };
 
-  // Memuat kembali parameter riwayat gambar ke workspace kerja utama
+  const handleSaveToGallery = (imgUrl) => {
+    const newEntry = {
+      id: Date.now() + Math.random(), 
+      image: imgUrl,
+      prompt: prompt,
+      model: selectedModel,
+      date: new Date().toLocaleString('id-ID')
+    };
+    const updatedGallery = [newEntry, ...gallery].slice(0, 30); 
+    setGallery(updatedGallery);
+    alert('Gambar berhasil disimpan ke Galeri!');
+  };
+
+  const handleDeleteFromGallery = (idToRemove) => setGallery(gallery.filter(item => item.id !== idToRemove));
+
   const handleLoadParameters = (item) => {
     setPrompt(item.prompt || '');
     setNegativePrompt(item.negativePrompt || '');
     setSelectedModel(item.model || '');
+    // Memuat kembali spesifik worker jika ada di history dan worker-nya masih online
+    if(item.worker) {
+      const isOnline = workersList.some(w => w.name === item.worker || w.id === item.worker);
+      if(isOnline) setSelectedWorker(item.worker);
+      else setSelectedWorker('');
+    } else {
+      setSelectedWorker('');
+    }
     setResolution(item.resolution || '1024x1024');
     setSampler(item.sampler || 'k_dpmpp_2m');
     setSteps(item.steps || 25);
@@ -362,9 +404,8 @@ const WebUI = () => {
     setSeed(item.seed || '');
     setClipSkip(item.clipSkip || 1);
     setLoras(item.loras || []);
-    setActiveTab('generate'); // Lempar balik ke tab generator utama
-    setSelectedHistoryItem(null); // Tutup modal
-    alert('Seluruh parameter, model, dan struktur LoRA berhasil dikembalikan!');
+    setActiveTab('generate'); 
+    setSelectedHistoryItem(null); 
   };
 
   const handleDeleteFromHistory = (idToRemove) => setHistory(history.filter(item => item.id !== idToRemove));
@@ -393,7 +434,6 @@ const WebUI = () => {
             <h1 className="text-2xl font-bold tracking-tight text-gray-900">AI Gen <span className="text-blue-600">Biji</span></h1>
             <nav className="hidden sm:flex space-x-1">
               <button onClick={() => setActiveTab('generate')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'generate' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>Generator</button>
-              {/* Diperbarui: Teks Tab berubah menjadi History */}
               <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'history' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>History ({history.length})</button>
             </nav>
           </div>
@@ -428,6 +468,8 @@ const WebUI = () => {
 
               <div className="bg-white p-5 border border-gray-200 rounded-2xl shadow-sm space-y-4">
                 <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wider mb-3 border-b pb-2">Pengaturan Utama</h2>
+                
+                {/* SELECT MODEL */}
                 <div>
                   <label className="flex justify-between text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
                     <span>Model AI Aktif</span>
@@ -442,8 +484,24 @@ const WebUI = () => {
                     ))}
                   </select>
                 </div>
+
+                {/* SELECT WORKER BARU */}
+                <div>
+                  <label className="flex justify-between text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
+                    <span>Target Worker (GPU)</span>
+                  </label>
+                  <select
+                    value={selectedWorker} onChange={(e) => setSelectedWorker(e.target.value)} disabled={isLoadingData}
+                    className="w-full p-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 bg-gray-50 disabled:opacity-50"
+                  >
+                    <option value="">Auto (Pilih GPU Tercepat)</option>
+                    {workersList.map((worker) => (
+                      <option key={worker.id} value={worker.id}>{worker.name}</option>
+                    ))}
+                  </select>
+                </div>
                 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-3 pt-1">
                   <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Resolusi</label>
                     <select
@@ -586,7 +644,7 @@ const WebUI = () => {
                     {isGenerating ? (
                       <span className="flex items-center gap-2">
                         <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        {statusMessage || 'Memproses...'}
+                        Memproses...
                       </span>
                     ) : `Generate ${batchSize > 1 ? batchSize + ' Gambar' : 'Gambar'}`}
                   </button>
@@ -595,7 +653,7 @@ const WebUI = () => {
                 </div>
               </div>
 
-              {/* Area Hasil Gambar Aktif (Tombol simpan dihilangkan karena sekarang otomatis masuk history) */}
+              {/* === AREA HASIL GAMBAR DENGAN PANEL PROGRES QoL === */}
               <div className="bg-white p-2 border border-gray-200 rounded-2xl shadow-sm min-h-[400px] flex flex-col items-center justify-center relative overflow-hidden bg-gradient-to-b from-gray-50 to-gray-100">
 
                 {generatedImages.length === 0 && !isGenerating && !error && (
@@ -607,12 +665,56 @@ const WebUI = () => {
                 )}
 
                 {isGenerating && (
-                  <div className="flex flex-col items-center space-y-4 px-6 text-center z-10 bg-white/80 p-6 rounded-2xl backdrop-blur-sm">
-                    <div className="w-12 h-12 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin shadow-md"></div>
-                    <div>
-                      <p className="text-base font-bold text-gray-800">{statusMessage}</p>
-                      <p className="text-xs text-gray-500 mt-1">Memproses {batchSize > 1 ? `${batchSize} gambar` : 'gambar'} pada klaster terdistribusi...</p>
+                  <div className="flex flex-col items-center space-y-6 px-8 py-10 text-center z-10 bg-white/90 rounded-3xl backdrop-blur-md shadow-2xl border border-indigo-100 max-w-sm w-full animate-fade-in-down">
+                    
+                    {/* Lingkaran Status Dinamis */}
+                    <div className="relative w-24 h-24">
+                      {genProgress.status === 'downloading' ? (
+                        <div className="w-full h-full border-4 border-green-500 border-t-green-200 rounded-full animate-spin"></div>
+                      ) : (
+                        <div className={`w-full h-full border-4 rounded-full animate-spin ${genProgress.status === 'rendering' ? 'border-indigo-200 border-t-indigo-600' : 'border-amber-200 border-t-amber-500'}`}></div>
+                      )}
+                      
+                      <div className="absolute inset-0 flex items-center justify-center text-3xl">
+                        {genProgress.status === 'rendering' ? '🎨' : genProgress.status === 'downloading' ? '📦' : '⏳'}
+                      </div>
                     </div>
+                    
+                    {/* Teks Status */}
+                    <div className="w-full space-y-3">
+                      <p className="text-lg font-bold text-gray-800">
+                        {genProgress.status === 'rendering' ? 'GPU Sedang Merender...' 
+                         : genProgress.status === 'downloading' ? 'Mengunduh Hasil Akhir...'
+                         : 'Menunggu Antrean Jaringan...'}
+                      </p>
+                      
+                      {/* Metrik Data */}
+                      {genProgress.status !== 'downloading' && (
+                        <div className="space-y-2">
+                          {genProgress.status === 'waiting' && genProgress.queue > 0 && (
+                            <div className="flex justify-between items-center bg-amber-50 px-4 py-2.5 rounded-xl border border-amber-100">
+                              <span className="text-xs font-bold text-amber-700 uppercase tracking-wider">Posisi Antrean</span>
+                              <span className="text-lg font-black text-amber-600">{genProgress.queue}</span>
+                            </div>
+                          )}
+                          
+                          {genProgress.waitTime > 0 && (
+                            <div className="flex justify-between items-center bg-indigo-50 px-4 py-2.5 rounded-xl border border-indigo-100">
+                              <span className="text-xs font-bold text-indigo-700 uppercase tracking-wider">Estimasi Waktu</span>
+                              <span className="text-lg font-black text-indigo-600">{genProgress.waitTime} <span className="text-xs">detik</span></span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <p className="text-xs text-gray-500 font-medium">
+                      {genProgress.status === 'rendering' 
+                        ? 'Harap tunggu. Worker sedang mengeksekusi parameter dan model yang Anda minta.' 
+                        : genProgress.status === 'downloading'
+                        ? 'Menyimpan ke History Lokal...'
+                        : 'Mencari GPU publik yang tersedia untuk mengeksekusi request Anda.'}
+                    </p>
                   </div>
                 )}
 
@@ -667,7 +769,7 @@ const WebUI = () => {
                 {history.map((item) => (
                   <div 
                     key={item.id} 
-                    onClick={() => setSelectedHistoryItem(item)} // Memicu Modal Detail
+                    onClick={() => setSelectedHistoryItem(item)}
                     className="bg-gray-50 rounded-2xl border border-gray-200 overflow-hidden hover:shadow-lg hover:border-indigo-400 transition-all duration-300 cursor-pointer group relative"
                   >
                     <div className="aspect-square bg-gray-200 overflow-hidden relative">
@@ -696,7 +798,6 @@ const WebUI = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/70 backdrop-blur-sm p-4 animate-fade-in-down">
           <div className="bg-white rounded-3xl w-full max-w-5xl h-[85vh] flex flex-col md:flex-row shadow-2xl overflow-hidden border border-gray-200">
             
-            {/* Sisi Kiri: Preview Gambar */}
             <div className="flex-1 bg-gray-900 flex items-center justify-center p-4 relative group">
               <img src={selectedHistoryItem.image} alt="Detail view" className="max-w-full max-h-full object-contain rounded-xl" />
               <button 
@@ -707,10 +808,8 @@ const WebUI = () => {
               </button>
             </div>
 
-            {/* Sisi Kanan: Bedah Parameter & Metadata */}
             <div className="w-full md:w-[450px] border-t md:border-t-0 md:border-l border-gray-200 flex flex-col bg-white h-full">
               
-              {/* Header Info Modal */}
               <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
                 <div>
                   <h3 className="text-sm font-bold text-gray-800">Metadata & Parameter Info</h3>
@@ -721,13 +820,20 @@ const WebUI = () => {
                 </button>
               </div>
 
-              {/* Konten Scrollable Parameter */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
                 
                 <div>
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Model AI Yang Digunakan</label>
                   <div className="p-2 bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-800 font-semibold">{selectedHistoryItem.model}</div>
                 </div>
+
+                {/* TAMPILAN TARGET WORKER DI HISTORY (Hanya jika dispesifikasi saat request) */}
+                {selectedHistoryItem.worker && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Worker Pengeksekusi</label>
+                    <div className="text-[11px] font-mono text-gray-600 bg-gray-50 p-2 border border-gray-200 rounded-xl">{selectedHistoryItem.worker}</div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Positive Prompt</label>
@@ -741,7 +847,6 @@ const WebUI = () => {
                   </div>
                 )}
 
-                {/* Grid Parameter Teknis KSampler */}
                 <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-100">
                   <div>
                     <span className="text-gray-400 block text-[10px] uppercase tracking-wider font-semibold">Sampler</span>
@@ -769,7 +874,6 @@ const WebUI = () => {
                   </div>
                 </div>
 
-                {/* Struktur Tumpukan LoRA yang Aktif saat itu */}
                 {selectedHistoryItem.loras && selectedHistoryItem.loras.length > 0 && (
                   <div className="pt-3 border-t border-gray-100 space-y-1.5">
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Tumpukan LoRA Yang Terkunci</label>
@@ -786,7 +890,6 @@ const WebUI = () => {
 
               </div>
 
-              {/* Action Footer: Kirim Balik Ke Generator */}
               <div className="p-4 border-t border-gray-200 bg-gray-50">
                 <button 
                   onClick={() => handleLoadParameters(selectedHistoryItem)}
