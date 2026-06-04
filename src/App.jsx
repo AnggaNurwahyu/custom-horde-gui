@@ -93,7 +93,9 @@ const WebUI = () => {
   const [apiKey, setApiKey] = useLocalStorage('horde_api_key', '');
 
   const [selectedModel, setSelectedModel] = useLocalStorage('horde_model', '');
-  const [selectedWorker, setSelectedWorker] = useLocalStorage('horde_worker', ''); // State Baru: Worker Select
+  // --- FITUR TARGET WORKER ---
+  const [selectedWorker, setSelectedWorker] = useLocalStorage('horde_worker', ''); 
+  // ---------------------------
   const [resolution, setResolution] = useLocalStorage('horde_resolution', '1024x1024');
   const [batchSize, setBatchSize] = useLocalStorage('horde_batch_size', 1); 
 
@@ -115,6 +117,9 @@ const WebUI = () => {
   // State Toggles
   const [useKarras, setUseKarras] = useLocalStorage('horde_karras', true);
   const [allowSlowWorkers, setAllowSlowWorkers] = useLocalStorage('horde_slow_workers', true);
+  // --- FITUR TRUSTED WORKERS ---
+  const [useTrustedWorkers, setUseTrustedWorkers] = useLocalStorage('horde_trusted_workers', false);
+  // -----------------------------
   const [useHiresFix, setUseHiresFix] = useLocalStorage('horde_hires', false);
   const [useTiling, setUseTiling] = useLocalStorage('horde_tiling', false);
 
@@ -124,14 +129,14 @@ const WebUI = () => {
 
   // State Dinamis Sesi Saat Ini
   const [models, setModels] = useState([]);
-  const [workersList, setWorkersList] = useState([]); // State Baru: List Worker
+  const [workersList, setWorkersList] = useState([]); // List worker dari API
   const [hordeStats, setHordeStats] = useState({ queued: 0, workers: 0 });
   const [isLoadingData, setIsLoadingData] = useState(true);
   
   // State Generasi & Progres QoL
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [genProgress, setGenProgress] = useState({ queue: 0, waitTime: 0, status: 'Menyiapkan...' }); 
+  const [genProgress, setGenProgress] = useState({ queue: 0, waitTime: 0, status: 'Menyiapkan...' });
   const [generatedImages, setGeneratedImages] = useState([]); 
   const [error, setError] = useState(null);
 
@@ -145,10 +150,11 @@ const WebUI = () => {
 
         const modelsRes = await fetch('https://stablehorde.net/api/v2/status/models');
         const modelsData = await modelsRes.json();
+
         const activeModels = modelsData.filter(m => m.type === 'image').sort((a, b) => b.count - a.count);
         setModels(activeModels);
 
-        // FITUR BARU: Fetch daftar workers yang sedang online
+        // Fetch Daftar Worker Aktif (Publik)
         const workersRes = await fetch('https://stablehorde.net/api/v2/workers?type=image');
         const workersData = await workersRes.json();
         const activeWorkers = workersData
@@ -221,13 +227,12 @@ const WebUI = () => {
     const loraId = selectedVersionId.toString();
 
     if (!loras.some(l => l.name === loraId)) {
-      // Menyematkan flag is_version: true secara internal untuk menandai bahwa ini dari Browser
-      setLoras([...loras, { id: Date.now(), name: loraId, title: `${civitaiModel.name} (${versionName})`, strength: 1.0, is_version: true }]);
+      setLoras([...loras, { id: Date.now(), name: loraId, title: `${civitaiModel.name} (${versionName})`, strength: 1.0 }]);
     }
     setIsLoraBrowserOpen(false); 
   };
 
-  const handleAddLoraManual = () => setLoras([...loras, { id: Date.now(), name: '', title: '', strength: 1.0, is_version: false }]);
+  const handleAddLoraManual = () => setLoras([...loras, { id: Date.now(), name: '', title: '', strength: 1.0 }]);
   const handleUpdateLora = (id, field, value) => setLoras(loras.map(l => l.id === id ? { ...l, [field]: value } : l));
   const handleRemoveLora = (id) => setLoras(loras.filter(l => l.id !== id));
 
@@ -247,12 +252,12 @@ const WebUI = () => {
     const seedValue = seed.trim();
     const finalSeed = seedValue === '' ? generateRandomSeed() : /^\d+$/.test(seedValue) ? seedValue : generateRandomSeed();
 
-    // BUG FIX LORA: Menyertakan 'is_version: true' jika berasal dari browser Civitai
+    // MENGEMBALIKAN is_version: true AGAR LORA BERHASIL DIUNDUH WORKER
     const activeLoras = loras.filter(l => l.name.trim() !== '').map(l => ({
         name: l.name.trim(), 
         model: parseFloat(l.strength),
         clip: parseFloat(l.strength),
-        ...( (l.is_version || l.title) ? { is_version: true } : {} )
+        is_version: true
     }));
 
     const baseParams = {
@@ -274,12 +279,13 @@ const WebUI = () => {
     const payload = {
       prompt: fullPrompt,
       censor_nsfw: false, 
+      trusted_workers: useTrustedWorkers, // FITUR TRUSTED WORKERS
       slow_workers: allowSlowWorkers,
       models: [selectedModel],
       params: baseParams
     };
 
-    // Menyisipkan preferensi worker jika dipilih
+    // MENYISIPKAN TARGET WORKER PRIVAT/PUBLIK JIKA DIISI
     if (selectedWorker && selectedWorker.trim() !== '') {
       payload.workers = [selectedWorker.trim()];
     }
@@ -306,7 +312,8 @@ const WebUI = () => {
         const checkRes = await fetch(`https://stablehorde.net/api/v2/generate/check/${requestId}`);
         const checkData = await checkRes.json();
 
-        if (checkData.faulted) throw new Error('Worker GPU gagal memproses. Jika menggunakan target worker, pastikan model/lora didukung oleh worker tersebut.');
+        // Pesan Error Spesifik Jika Worker Gagal/Tidak Kuat VRAM
+        if (checkData.faulted) throw new Error('Worker GPU mengalami kegagalan. Jika Anda menggunakan Worker privat, pastikan Worker Anda sanggup memuat jumlah LoRA yang di-request (Cek max_loras worker Anda).');
 
         if (checkData.done) {
           isDone = true;
@@ -319,6 +326,7 @@ const WebUI = () => {
           if (statusData.generations && statusData.generations.length > 0) {
             const processedImages = statusData.generations.map(gen => {
               const src = (gen.img.startsWith('http://') || gen.img.startsWith('https://')) ? gen.img : `data:image/webp;base64,${gen.img}`;
+              // Menangkap nama worker asli dari API untuk dicatat ke History
               return { url: src, seed: gen.seed || finalSeed, worker_name: gen.worker_name };
             });
             
@@ -330,7 +338,7 @@ const WebUI = () => {
               prompt: prompt,
               negativePrompt: negativePrompt,
               model: selectedModel,
-              worker: p.worker_name || selectedWorker, // Simpan histori worker yang eksekusi
+              worker: p.worker_name || selectedWorker, // Simpan info worker di history
               resolution: resolution,
               sampler: sampler,
               steps: steps,
@@ -346,12 +354,12 @@ const WebUI = () => {
             throw new Error('Gambar diproses, namun tidak ada data yang dikembalikan.');
           }
         } else {
-          // UPDATE PROGRESS BERDASARKAN STATUS ANTRIAN/RENDERING DARI HORDE
           setGenProgress({
             queue: checkData.queue_position || 0,
             waitTime: checkData.wait_time || 0,
             status: checkData.processing > 0 ? 'rendering' : 'waiting'
           });
+          setStatusMessage(checkData.processing > 0 ? 'Sedang dirender oleh GPU...' : 'Menunggu Antrean Jaringan...');
         }
       }
     } catch (err) {
@@ -389,14 +397,14 @@ const WebUI = () => {
     setPrompt(item.prompt || '');
     setNegativePrompt(item.negativePrompt || '');
     setSelectedModel(item.model || '');
-    // Memuat kembali spesifik worker jika ada di history dan worker-nya masih online
+    
+    // Fitur Load Worker dengan cerdas (meskipun worker privat/unlisted, tetap bisa dimuat)
     if(item.worker) {
-      const isOnline = workersList.some(w => w.name === item.worker || w.id === item.worker);
-      if(isOnline) setSelectedWorker(item.worker);
-      else setSelectedWorker('');
+      setSelectedWorker(item.worker);
     } else {
       setSelectedWorker('');
     }
+
     setResolution(item.resolution || '1024x1024');
     setSampler(item.sampler || 'k_dpmpp_2m');
     setSteps(item.steps || 25);
@@ -468,8 +476,6 @@ const WebUI = () => {
 
               <div className="bg-white p-5 border border-gray-200 rounded-2xl shadow-sm space-y-4">
                 <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wider mb-3 border-b pb-2">Pengaturan Utama</h2>
-                
-                {/* SELECT MODEL */}
                 <div>
                   <label className="flex justify-between text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
                     <span>Model AI Aktif</span>
@@ -485,23 +491,28 @@ const WebUI = () => {
                   </select>
                 </div>
 
-                {/* SELECT WORKER BARU */}
+                {/* TARGET WORKER (DATALIST) AGAR BISA KETIK WORKER PRIVAT */}
                 <div>
                   <label className="flex justify-between text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
-                    <span>Target Worker (GPU)</span>
+                    <span>Target Worker (Opsional)</span>
                   </label>
-                  <select
-                    value={selectedWorker} onChange={(e) => setSelectedWorker(e.target.value)} disabled={isLoadingData}
-                    className="w-full p-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 bg-gray-50 disabled:opacity-50"
-                  >
-                    <option value="">Auto (Pilih GPU Tercepat)</option>
-                    {workersList.map((worker) => (
-                      <option key={worker.id} value={worker.id}>{worker.name}</option>
+                  <input
+                    type="text"
+                    list="horde-workers"
+                    placeholder="Auto, atau Ketik UUID Worker Anda"
+                    className="w-full p-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 bg-gray-50 font-mono"
+                    value={selectedWorker}
+                    onChange={(e) => setSelectedWorker(e.target.value)}
+                  />
+                  <datalist id="horde-workers">
+                    {workersList.map((w) => (
+                      <option key={w.id} value={w.id}>{w.name}</option>
                     ))}
-                  </select>
+                  </datalist>
                 </div>
+                {/* ======================================================= */}
                 
-                <div className="grid grid-cols-2 gap-3 pt-1">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Resolusi</label>
                     <select
@@ -602,6 +613,7 @@ const WebUI = () => {
 
               <div className="bg-white p-4 border border-gray-200 rounded-2xl shadow-sm space-y-1">
                 <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wider mb-3 border-b pb-2">Parameter Tambahan</h2>
+                <ToggleSwitch label="Trusted Workers Only" description="Hanya gunakan worker terverifikasi." checked={useTrustedWorkers} onChange={setUseTrustedWorkers} />
                 <ToggleSwitch label="Karras Schedule" description="Kurangi noise pada langkah sampler." checked={useKarras} onChange={setUseKarras} />
                 <ToggleSwitch label="Allow Slow Workers" description="Matikan untuk abaikan GPU lambat." checked={allowSlowWorkers} onChange={setAllowSlowWorkers} />
                 <ToggleSwitch label="Hires Fix" description="Upscale & perbaiki detail gambar." checked={useHiresFix} onChange={setUseHiresFix} />
@@ -812,7 +824,7 @@ const WebUI = () => {
               
               <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
                 <div>
-                  <h3 className="text-sm font-bold text-gray-800">Metadata & Parameter Info</h3>
+                  <h3 className="text-sm font-bold text-gray-800">Metadata Info</h3>
                   <p className="text-[10px] text-gray-400 mt-0.5">{selectedHistoryItem.date}</p>
                 </div>
                 <button onClick={() => setSelectedHistoryItem(null)} className="text-gray-400 hover:text-gray-600 bg-gray-200/60 p-1.5 rounded-lg">
@@ -827,11 +839,11 @@ const WebUI = () => {
                   <div className="p-2 bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-800 font-semibold">{selectedHistoryItem.model}</div>
                 </div>
 
-                {/* TAMPILAN TARGET WORKER DI HISTORY (Hanya jika dispesifikasi saat request) */}
+                {/* TAMPILAN TARGET WORKER DI HISTORY */}
                 {selectedHistoryItem.worker && (
                   <div>
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Worker Pengeksekusi</label>
-                    <div className="text-[11px] font-mono text-gray-600 bg-gray-50 p-2 border border-gray-200 rounded-xl">{selectedHistoryItem.worker}</div>
+                    <div className="p-2 bg-gray-50 border border-gray-200 rounded-xl font-mono text-gray-600 text-[10px]">{selectedHistoryItem.worker}</div>
                   </div>
                 )}
 
@@ -893,7 +905,7 @@ const WebUI = () => {
               <div className="p-4 border-t border-gray-200 bg-gray-50">
                 <button 
                   onClick={() => handleLoadParameters(selectedHistoryItem)}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all active:scale-95 text-xs flex justify-center items-center gap-2"
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all active:scale-95 text-xs flex justify-center items-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                   Kembalikan ke Panel Kerja (Load Params)
